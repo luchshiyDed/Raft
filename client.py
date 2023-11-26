@@ -3,6 +3,7 @@ import socketserver
 import sys
 import pickle
 import threading
+import time
 from typing import Union
 import fastapi_jsonrpc as jsonrpc
 from pydantic import BaseModel
@@ -117,6 +118,7 @@ async def getResponce(add):
                     print(data)
                     data = conn.recv(1024)
                     tries-=1
+                    time.sleep(0.3)
                 return pickle.loads(data)
         except Exception as e:
             print(e)

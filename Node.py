@@ -262,7 +262,7 @@ class node:
                     self._lock.acquire()
                     self.send_to_node(i, self.create_heartbeat(i))
                     self._lock.release()
-                    time.sleep(0.3)
+                    time.sleep(1)
             if self._state == 1:
                 time.sleep(1)
                 if self._state == 1:
