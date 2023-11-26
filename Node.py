@@ -41,7 +41,6 @@ class node:
 
     def handle(self, data, client):
         dict = pickle.loads(data)
-
         self._lock.acquire()
         if dict['type'] == 'HB':
             self.handle_heartbeat(dict)
@@ -252,7 +251,7 @@ class node:
     def heartbeat(self):
         while True:
             if self._state == 0:
-                time.sleep(self._random.randint(10, 20))
+                time.sleep(self._random.randint(1, 5))
                 self._lock.acquire()
                 if not self._leader_alive:
                     self._start_election()
@@ -263,7 +262,7 @@ class node:
                     self._lock.acquire()
                     self.send_to_node(i, self.create_heartbeat(i))
                     self._lock.release()
-                    time.sleep(1)
+                    time.sleep(0.3)
             if self._state == 1:
                 time.sleep(1)
                 if self._state == 1:

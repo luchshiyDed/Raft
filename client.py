@@ -154,4 +154,3 @@ if __name__ == '__main__':
     import uvicorn
 
     uvicorn.run('client:app', host=loc_ip, port=own_loc_port)
-sadasdas
