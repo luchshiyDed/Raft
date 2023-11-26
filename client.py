@@ -112,9 +112,11 @@ async def getResponce(add):
             with conn:
                 print('Connected by', addr)
                 data = conn.recv(1024)
-                while data == b'':
+                tries=3
+                while data == b'' and tries>=0:
                     print(data)
                     data = conn.recv(1024)
+                    tries-=1
                 return pickle.loads(data)
         except Exception as e:
             print(e)
