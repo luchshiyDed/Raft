@@ -251,7 +251,7 @@ class node:
     def heartbeat(self):
         while True:
             if self._state == 0:
-                time.sleep(self._random.randint(5, 10))
+                time.sleep(self._random.randint(10, 15))
                 self._lock.acquire()
                 if not self._leader_alive:
                     self._start_election()
