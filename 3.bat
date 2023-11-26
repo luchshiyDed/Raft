@@ -1,1 +1,1 @@
-python main.py 192.168.0.49 8003 8001 8002 8000 8004
+python main.py localhost 8003 8001 8002 8000 8004

@@ -142,9 +142,11 @@ async def get(port: Union[int, None], func: Union[str, None] = 'heartbeat', key:
         try:
             sock.connect(address)
             sock.sendall(pickle.dumps(data, pickle.HIGHEST_PROTOCOL))
+            res = await getResponce(add)
         except Exception as err:
             print(f'unable to connect {address} {err}')
-    res = await getResponce(add)
+            res='network error'
+
     return res
 
 

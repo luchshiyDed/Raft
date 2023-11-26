@@ -42,7 +42,7 @@ class node:
     def handle(self, data, client):
         dict = pickle.loads(data)
         self._lock.acquire()
-        if dict['type'] == 'HB':
+        if dict['type'] == 'HB' or dict['type'] == 'HBR':
             self.handle_heartbeat(dict)
             self.check_log()
         elif dict['type'] == 'CR':
@@ -85,11 +85,11 @@ class node:
         parsed = self._log[index].split()
         if parsed[0] == 'pop':
             st = self._hash_table.pop(parsed[1], 'fail')
+            print(f'Hash table changed: {self._hash_table}')
         elif parsed[0] == 'set':
             self._hash_table.update({parsed[1]: parsed[2]})
             st = 'success'
-
-        print(f'Hash table changed: {self._hash_table}')
+            print(f'Hash table changed: {self._hash_table}')
 
         if self._state==2:
             self.send(self._nodes_proceeding_requests.pop(index), st)
@@ -162,7 +162,7 @@ class node:
         print(data)
         print('-----------------------')
         #print(self._hash_table)
-        if self._state == 2:
+        if self._state == 2 and data['type']=='HBR':
             if data['term'] > self._current_term:
                 self._current_term = data['term']
                 self._state = 0
@@ -179,14 +179,14 @@ class node:
             if data['term'] > self._current_term:
                 self._state = 0
 
-        if self._state == 0:
+        if self._state == 0 and data['type']=='HB':
             self._leader_id = data['id']
             if data['term'] > self._current_term:
                 self._current_term = data['term']
 
             if self._current_term > data['term']:
                 self.send_to_node(data['id'], {
-                    'type': 'HB',
+                    'type': 'HBR',
                     'id': self._id,
                     'status': 'fail',
                     'term': self._current_term
@@ -198,7 +198,7 @@ class node:
 
             if cond:
                 self.send_to_node(data['id'], {
-                    'type': 'HB',
+                    'type': 'HBR',
                     'id': self._id,
                     'status': 'fail',
                     'term': self._current_term
@@ -222,7 +222,7 @@ class node:
                 self._commit_index = min(data['commit_index'], len(self._log) - 1)
 
             self.send_to_node(data['id'], {
-                'type': 'HB',
+                'type': 'HBR',
                 'term': self._current_term,
                 'id': self._id,
                 'status': 'success',
@@ -251,7 +251,7 @@ class node:
     def heartbeat(self):
         while True:
             if self._state == 0:
-                time.sleep(self._random.randint(1, 5))
+                time.sleep(self._random.randint(5, 10))
                 self._lock.acquire()
                 if not self._leader_alive:
                     self._start_election()
