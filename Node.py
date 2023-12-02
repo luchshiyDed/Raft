@@ -5,7 +5,6 @@ import threading
 import time
 
 
-
 class node:
     def __init__(self, id, adresses):
         # 0 -follower 1-candidate 2-leader
@@ -28,6 +27,7 @@ class node:
         self._match_index = {}
         self._lock = threading.Lock()
         self._my_clients = {}
+        self._election_deadline = 0
         self._thread = threading.Thread(target=self.heartbeat)
         self._thread.start()
 
@@ -47,7 +47,7 @@ class node:
             self.check_log()
         elif dict['type'] == 'CR':
             self.handle_client_request(dict)
-        elif dict['type'] == 'EL':
+        elif dict['type'] == 'EL' or dict['type'] == 'ELR':
             self.handle_election(dict)
         self._lock.release()
 
@@ -57,7 +57,7 @@ class node:
             for i in self._match_index.values():
                 counts.update({i: counts.get(i, 0) + 1})
             for k, v in counts.items():
-                if k > self._commit_index and v > (len(self._other_nodes.values())+1)/2 -1:
+                if k > self._commit_index and v > (len(self._other_nodes.values()) + 1) / 2 - 1:
                     self._commit_index = k
         if self._commit_index > self._last_applied:
             i = self._last_applied + 1
@@ -91,9 +91,8 @@ class node:
             st = 'success'
             print(f'Hash table changed: {self._hash_table}')
 
-        if self._state==2:
+        if self._state == 2:
             self.send(self._nodes_proceeding_requests.pop(index), st)
-
 
             # self._clients.pop(index).sendall(pickle.dumps(responce,pickle.HIGHEST_PROTOCOL))
 
@@ -111,26 +110,29 @@ class node:
             'last_applied': self._last_applied,
             'vote': 0
         }
+        self._election_deadline = time.time() + self._random.randint(4, 10)
         for i in self._other_nodes.keys():
             self.send_to_node(i, el_pack)
 
     def handle_election(self, data):
         print(data)
-
-        if self._state == 1:
-            if self._last_applied < data['last_applied']:
-                self._state = 0
+        print('^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^')
+        if self._state == 1 and data['type'] == 'ELR':
             if self._current_term < data['term']:
                 self._current_term = data['term']
                 self._state = 0
                 return
+            if self._last_applied < data['last_applied']:
+                self._state = 0
+                return
+            self._election_deadline = time.time() + self._random.randint(4, 10)
             self._votes_cnt += data['vote']
             if self._votes_cnt > (len(self._other_nodes.keys()) + 1) / 2:
                 self.become_leader()
-        elif self._state == 0:
+        elif self._state == 0 and data['type'] == 'EL':
             self._leader_alive = True
             reply = {
-                'type': 'EL',
+                'type': 'ELR',
                 'id': self._id,
                 'term': self._current_term,
                 'last_applied': self._last_applied,
@@ -160,9 +162,9 @@ class node:
         self._leader_alive = True
         self._voted_for = None
         print(data)
-        print('-----------------------')
-        #print(self._hash_table)
-        if self._state == 2 and data['type']=='HBR':
+        print('-----------------------------------')
+        # print(self._hash_table)
+        if self._state == 2 and data['type'] == 'HBR':
             if data['term'] > self._current_term:
                 self._current_term = data['term']
                 self._state = 0
@@ -179,7 +181,7 @@ class node:
             if data['term'] > self._current_term:
                 self._state = 0
 
-        if self._state == 0 and data['type']=='HB':
+        if self._state == 0 and data['type'] == 'HB':
             self._leader_id = data['id']
             if data['term'] > self._current_term:
                 self._current_term = data['term']
@@ -257,28 +259,30 @@ class node:
                     self._start_election()
                 self._leader_alive = False
                 self._lock.release()
-            if self._state == 2:
+            elif self._state == 2:
                 for i in self._other_nodes.keys():
                     self._lock.acquire()
                     self.send_to_node(i, self.create_heartbeat(i))
                     self._lock.release()
                     time.sleep(1)
-            if self._state == 1:
-                time.sleep(1)
-                if self._state == 1:
-                    self._state = 0
+            elif self._state == 1:
+                self._lock.acquire()
+                if time.time() > self._election_deadline:
+                    if self._state == 1:
+                        self._state = 0
+                self._lock.release()
 
     def handle_client_request(self, data):
         parsed = data['request'].split()
         if parsed[0] == 'get':
-            self.send(data['client'],self._hash_table.get(parsed[1], 'No such key'))
+            self.send(data['client'], self._hash_table.get(parsed[1], 'No such key'))
             return
         if self._state == 2:
             self._log.append(data['request'])
             self._nodes_proceeding_requests.update({len(self._log) - 1: data['client']})
             self._log_terms.append(self._current_term)
             print(self._log)
-        if self._state == 0:
+        elif self._state == 0:
             if self._leader_id is not None:
                 self.send_to_node(self._leader_id, data)
             # for k in self._other_nodes.keys():
