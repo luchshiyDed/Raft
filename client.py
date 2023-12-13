@@ -113,11 +113,11 @@ async def getResponce(add):
             with conn:
                 print('Connected by', addr)
                 data = conn.recv(1024)
-                tries=3
-                while data == b'' and tries>=0:
+                tries = 3
+                while data == b'' and tries >= 0:
                     print(data)
                     data = conn.recv(1024)
-                    tries-=1
+                    tries -= 1
                     time.sleep(0.3)
                 return pickle.loads(data)
         except Exception as e:
@@ -149,7 +149,7 @@ async def get(port: Union[int, None], func: Union[str, None] = 'heartbeat', key:
             res = await getResponce(add)
         except Exception as err:
             print(f'unable to connect {address} {err}')
-            res='network error'
+            res = 'network error'
 
     return res
 

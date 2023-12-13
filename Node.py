@@ -6,17 +6,25 @@ import time
 
 
 class node:
-    def __init__(self, id, adresses):
+    def __init__(self, id, adresses, added=False):
         # 0 -follower 1-candidate 2-leader
         self._random = random.Random(id)
         self._hash_table = {}
         self._state = 0
+        if added:
+            self._state = -1
         self._leader_id = None
         self._id = id
         self._leader_alive = False
         self.my_addr = adresses.pop(id)
         print(self.my_addr)
         self._other_nodes = adresses
+        self._node_states = {}
+        for k, _ in adresses.items():
+            self._node_states.update({
+                k: 2
+            })
+
         self._current_term = 0
         self._voted_for = None
         self._log = ['init']
@@ -40,15 +48,19 @@ class node:
             self._match_index.update({i: 0})
 
     def handle(self, data, client):
-        dict = pickle.loads(data)
+        inp_data = pickle.loads(data)
         self._lock.acquire()
-        if dict['type'] == 'HB' or dict['type'] == 'HBR':
-            self.handle_heartbeat(dict)
+        if inp_data['type'] == 'HB' or inp_data['type'] == 'HBR':
+            self.handle_heartbeat(inp_data)
             self.check_log()
-        elif dict['type'] == 'CR':
-            self.handle_client_request(dict)
-        elif dict['type'] == 'EL' or dict['type'] == 'ELR':
-            self.handle_election(dict)
+        elif inp_data['type'] == 'CR':
+            self.handle_client_request(inp_data)
+        elif inp_data['type'] == 'EL' or inp_data['type'] == 'ELR':
+            self.handle_election(inp_data)
+        elif inp_data['type'] == 'NUP':
+            self.handle_node_update(inp_data)
+        elif inp_data['type'] == 'NND':
+            self.handle_new_node(inp_data)
         self._lock.release()
 
     def check_log(self):
@@ -67,14 +79,14 @@ class node:
 
     def send(self, address, data):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            try:
-                sock.connect(address)
-                sock.sendall(pickle.dumps(data, pickle.HIGHEST_PROTOCOL))
-            except Exception as err:
-                print(f'unable to connect {address} {err}')
+            sock.connect(address)
+            sock.sendall(pickle.dumps(data, pickle.HIGHEST_PROTOCOL))
 
     def send_to_node(self, id, data):
-        self.send(self._other_nodes[id], data)
+        try:
+            self.send(self._other_nodes[id], data)
+        except Exception as err:
+            print(f'unable to connect {self._other_nodes[id]} {err}')
 
     def apply(self, index):
         self._last_applied = index
@@ -96,10 +108,19 @@ class node:
 
             # self._clients.pop(index).sendall(pickle.dumps(responce,pickle.HIGHEST_PROTOCOL))
 
+    def count_nodes_alive(self):
+        self._nodes_alive = 1
+        for i in self._node_states.values():
+            if i > 0:
+                self._nodes_alive += 1
+
     def _start_election(self):
         self._state = 1
         self._current_term += 1
         self._votes_cnt = 1
+        self._total_votes = 1
+        self.count_nodes_alive()
+
         print('leader lost, starting election')
         el_pack = {
             'type': 'EL',
@@ -108,13 +129,16 @@ class node:
             'last_log_index': (len(self._log) - 1),
             'last_log_term': self._log_terms[-1],
             'last_applied': self._last_applied,
+            'nodes_alive': self._nodes_alive,
             'vote': 0
         }
         self._election_deadline = time.time() + self._random.randint(4, 10)
         for i in self._other_nodes.keys():
+            self.mark_node_as_dead(i)
             self.send_to_node(i, el_pack)
 
     def handle_election(self, data):
+        self.restore_dead_node(data['id'])
         print(data)
         print('^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^')
         if self._state == 1 and data['type'] == 'ELR':
@@ -125,17 +149,38 @@ class node:
             if self._last_applied < data['last_applied']:
                 self._state = 0
                 return
+            if self._nodes_alive < data['nodes_alive']:
+                self._state = 0
+                return
+
             self._election_deadline = time.time() + self._random.randint(4, 10)
             self._votes_cnt += data['vote']
-            if self._votes_cnt > (len(self._other_nodes.keys()) + 1) / 2:
+            self._total_votes += 1
+            self.count_nodes_alive()
+            if self._votes_cnt > self._nodes_alive / 2 and self._nodes_alive <= self._total_votes:
                 self.become_leader()
+
+        if self._state == 1 and data['type'] == 'EL':
+            if self._current_term < data['term']:
+                self._current_term = data['term']
+                self._state = 0
+                return
+            if self._last_applied < data['last_applied']:
+                self._state = 0
+                return
+            if self._nodes_alive < data['nodes_alive']:
+                self._state = 0
+                return
+
         elif self._state == 0 and data['type'] == 'EL':
             self._leader_alive = True
+            self.count_nodes_alive()
             reply = {
                 'type': 'ELR',
                 'id': self._id,
                 'term': self._current_term,
                 'last_applied': self._last_applied,
+                'nodes_alive': self._nodes_alive,
                 'vote': 0
             }
             if self._last_applied > data['last_applied']:
@@ -158,6 +203,64 @@ class node:
             self.send_to_node(data['id'], reply)
             return
 
+    def restore_dead_node(self, id):
+        old_val = self._node_states[id]
+        new_val = 2
+        self._node_states.update({id: new_val})
+        if old_val <= 0:
+            self.node_update()
+            print(f'Node {id} is alive now')
+
+    def mark_node_as_dead(self, id):
+        old_val = self._node_states[id]
+        if old_val <= 0:
+            return
+        new_val = old_val - 1
+        self._node_states.update({id: new_val})
+        if new_val <= 0:
+            self.node_update()
+            print(f'Node {id} is dead now')
+
+    def node_update(self):
+        for i in self._other_nodes.keys():
+            other=self._other_nodes.copy()
+            other.pop(i)
+            other.update({self._id:self.my_addr})
+            states=self._node_states.copy()
+            states.pop(i)
+            states.update({self._id:1})
+            pack = {
+                'type': 'NUP',
+                'id': self._id,
+                'nodes': other,
+                'states': states
+            }
+            self.send_to_node(i, pack)
+
+    def handle_node_update(self, data):
+        if self._state == -1:
+            self._other_nodes = data['nodes']
+            self._node_states = data['states']
+            print(f'updated node info: {self._node_states}')
+            self._state = 0
+            print('I am in the node-net now!')
+        if self._state == 0:
+            if data['id'] == self._leader_id:
+                self._other_nodes = data['nodes']
+                self._node_states = data['states']
+                print(f'updated node info: {self._node_states}')
+
+    def handle_new_node(self, data):
+        if self._state == 0 and self._leader_id is not None:
+            self.send_to_node(self._leader_id, data)
+        elif self._state == 2:
+            self._other_nodes.update({data['id']: data['address']})
+            self._node_states.update({data['id']: 2})
+            id = data['id']
+            self._match_index.update({id:0})
+            self._next_index.update({id:len(self._log)})
+            print(f'Node {id} is in the node-net now!')
+
     def handle_heartbeat(self, data):
         self._leader_alive = True
         self._voted_for = None
@@ -165,6 +268,7 @@ class node:
         print('-----------------------------------')
         # print(self._hash_table)
         if self._state == 2 and data['type'] == 'HBR':
+            self.restore_dead_node(data['id'])
             if data['term'] > self._current_term:
                 self._current_term = data['term']
                 self._state = 0
@@ -252,6 +356,16 @@ class node:
 
     def heartbeat(self):
         while True:
+            if self._state == -1:
+                self._lock.acquire()
+                pack = {'type': 'NND',
+                        'id': self._id,
+                        'address': self.my_addr
+                        }
+                for i in self._other_nodes.keys():
+                    self.send_to_node(i, pack)
+                self._lock.release()
+                time.sleep(10)
             if self._state == 0:
                 time.sleep(self._random.randint(10, 15))
                 self._lock.acquire()
@@ -260,11 +374,12 @@ class node:
                 self._leader_alive = False
                 self._lock.release()
             elif self._state == 2:
+                self._lock.acquire()
                 for i in self._other_nodes.keys():
-                    self._lock.acquire()
+                    self.mark_node_as_dead(i)
                     self.send_to_node(i, self.create_heartbeat(i))
-                    self._lock.release()
-                    time.sleep(1)
+                self._lock.release()
+                time.sleep(1)
             elif self._state == 1:
                 self._lock.acquire()
                 if time.time() > self._election_deadline:
