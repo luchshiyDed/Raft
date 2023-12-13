@@ -228,7 +228,7 @@ class node:
             other.update({self._id:self.my_addr})
             states=self._node_states.copy()
             states.pop(i)
-            states.update({self._id:1})
+            states.update({self._id:0})
             pack = {
                 'type': 'NUP',
                 'id': self._id,
