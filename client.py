@@ -113,7 +113,7 @@ async def getResponce(add):
             with conn:
                 print('Connected by', addr)
                 data = conn.recv(1024)
-                tries=3
+                tries=0
                 while data == b'' and tries>=0:
                     print(data)
                     data = conn.recv(1024)
@@ -126,7 +126,7 @@ async def getResponce(add):
 
 @app.get("/rpc_old")
 async def get(port: Union[int, None], func: Union[str, None] = 'heartbeat', key: Union[str, None] = 'mykey',
-              params: Union[float, None] = None):
+              params: Union[int, None] = None):
     address = (loc_ip, port)
     add = (loc_ip, rport)
     if params is not None:
@@ -135,12 +135,16 @@ async def get(port: Union[int, None], func: Union[str, None] = 'heartbeat', key:
             'client': add,
             'request': f'{func} {key} {params}',
         }
+        data.update({'request': f'{func} {key} {params}'})
     else:
         data = {
             'type': 'CR',
             'client': add,
             'request': f'{func} {key}',
         }
+        if func=='lock' or func=='unlock':
+            data.update({'request': f'{func} {key} {port}'})
+
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         try:

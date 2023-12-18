@@ -4,6 +4,8 @@ import socket
 import threading
 import time
 
+TTL = 10
+
 
 class node:
     def __init__(self, id, adresses):
@@ -26,21 +28,25 @@ class node:
         self._next_index = {}
         self._match_index = {}
         self._lock = threading.Lock()
-        self._my_clients = {}
+        self._cas_lock = threading.Lock()
         self._election_deadline = 0
+        self._key_table = {}
+        self._key_info = {}
         self._thread = threading.Thread(target=self.heartbeat)
         self._thread.start()
 
     def become_leader(self):
         self._state = 2
         print('I am the leader')
-        self._nodes_proceeding_requests = {}
+        self._return_addresses = {}
         for i in self._other_nodes.keys():
             self._next_index.update({i: len(self._log)})
             self._match_index.update({i: 0})
 
     def handle(self, data, client):
         dict = pickle.loads(data)
+        if type(dict) is not type({}):
+            return
         self._lock.acquire()
         if dict['type'] == 'HB' or dict['type'] == 'HBR':
             self.handle_heartbeat(dict)
@@ -90,9 +96,18 @@ class node:
             self._hash_table.update({parsed[1]: parsed[2]})
             st = 'success'
             print(f'Hash table changed: {self._hash_table}')
-
+        elif parsed[0] == 'lock':
+            st = self._lockn(parsed[1], parsed[2])
+            print(self._key_table)
+            if parsed[2] == self._id:
+                print('I got the lock ' + parsed[1])
+        elif parsed[0] == 'unlock':
+            st = self._unlock(parsed[1], parsed[2])
+            print(self._key_table)
+            if parsed[2] == self._id:
+                print('I lost the lock ' + parsed[1])
         if self._state == 2:
-            self.send(self._nodes_proceeding_requests.pop(index), st)
+            self.send(self._return_addresses.pop(index), st)
 
             # self._clients.pop(index).sendall(pickle.dumps(responce,pickle.HIGHEST_PROTOCOL))
 
@@ -161,8 +176,7 @@ class node:
     def handle_heartbeat(self, data):
         self._leader_alive = True
         self._voted_for = None
-        print(data)
-        print('-----------------------------------')
+        #print('-----------------------------------')
         # print(self._hash_table)
         if self._state == 2 and data['type'] == 'HBR':
             if data['term'] > self._current_term:
@@ -273,13 +287,16 @@ class node:
                 self._lock.release()
 
     def handle_client_request(self, data):
+        print(data)
         parsed = data['request'].split()
         if parsed[0] == 'get':
             self.send(data['client'], self._hash_table.get(parsed[1], 'No such key'))
             return
+        elif parsed[0] == 'sleep':
+            time.sleep(10)
         if self._state == 2:
             self._log.append(data['request'])
-            self._nodes_proceeding_requests.update({len(self._log) - 1: data['client']})
+            self._return_addresses.update({len(self._log) - 1: data['client']})
             self._log_terms.append(self._current_term)
             print(self._log)
         elif self._state == 0:
@@ -288,3 +305,92 @@ class node:
             # for k in self._other_nodes.keys():
             #     pack = self.create_heartbeat(k)
             #     self.send_to(k, pack)
+
+    def _delete_key(self, key):
+        self._cas_lock.acquire()
+        self.send_unlock(key, self.my_addr)
+        self._cas_lock.release()
+        print('TTL ended')
+
+    def _cas(self, key, new_val, old_val, version, ttl=TTL):
+        self._cas_lock.acquire()
+        if self._key_table.get(key, None) == old_val:
+            tp = self._key_info.get(key, [None, my_thread(ttl, lambda: self._delete_key(key))])
+            if tp[0] != version and tp[0] is not None:
+                res = False
+            else:
+                self._key_table.update({key: new_val})
+                if self._state == 2:
+                    tp[1].start()
+                tp[0] = version
+                self._key_info.update({key: tp})
+                res = True
+
+        else:
+            res = False
+        self._cas_lock.release()
+        return res
+
+    def _relock(self, lock_name, ver):
+        self._cas(lock_name, 1, 1, ver)
+
+    def _lockn(self, lock_name, ver):
+        if locked := self._cas(lock_name, 1, 0, ver):
+            return locked
+        return self._cas(lock_name, 1, None, ver)
+
+    # версия None чтобы показать что блокировка снята иначе до выхода TTL после unlock нельзя будет сделать lock
+    def _unlock(self, lock_name, ver=None):
+        if res:=self._cas(lock_name, 0, 1, ver):
+            self._key_info.pop(lock_name)
+        return res
+
+    def send_lock(self, lock_name, client):
+        pach = {'type': 'CR',
+                'client': client,
+                'request': f'lock {lock_name} {self._key_info.get(lock_name,[self._id,None])[0]}'}
+        if self._state == 2:
+            self.send(self.my_addr, pach)
+            return
+        self.send_to_node(self._leader_id, pach)
+
+    def send_unlock(self, lock_name, client):
+        pach = {'type': 'CR',
+                'client': client,
+                'request': f'unlock {lock_name} {self._key_info.get(lock_name,[self._id,None])[0]}'}
+        if self._state == 2:
+            self.send(self.my_addr, pach)
+            return
+        self.send_to_node(self._leader_id, pach)
+
+
+class my_thread():
+    def __init__(self, ttl, target):
+        self.lock = threading.Lock()
+        self.is_running = False
+        self.target_time = time.time() + ttl
+        self.ttl = ttl
+        self.target = target
+        self.thread = None
+
+    def run(self):
+        self.is_running = True
+        while (True):
+            self.lock.acquire()
+            if time.time() > self.target_time:
+                break
+            self.lock.release()
+        self.target()
+        self.is_running = False
+
+    def start(self):
+        if self.is_running:
+            self.reload()
+        else:
+            self.thread = threading.Thread(target=self.run)
+            self.thread.start()
+
+    def reload(self):
+        self.lock.acquire()
+        self.target_time = time.time() + self.ttl
+        self.lock.release()
