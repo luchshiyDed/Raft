@@ -99,12 +99,12 @@ class node:
         elif parsed[0] == 'lock':
             st = self._lockn(parsed[1], parsed[2])
             print(self._key_table)
-            if parsed[2] == self._id:
+            if int(parsed[2]) == self._id:
                 print('I got the lock ' + parsed[1])
         elif parsed[0] == 'unlock':
             st = self._unlock(parsed[1], parsed[2])
             print(self._key_table)
-            if parsed[2] == self._id:
+            if int(parsed[2]) == self._id:
                 print('I lost the lock ' + parsed[1])
         if self._state == 2:
             self.send(self._return_addresses.pop(index), st)
@@ -165,6 +165,7 @@ class node:
             else:
                 if len(self._log) <= data['last_log_index']:
                     reply.update({'vote': 1})
+                    self._voted_for = data['id']
                 elif self._log_terms[data['last_log_index']] == data['last_log_term'] and self._voted_for is None:
                     reply.update({'vote': 1})
                     self._voted_for = data['id']
@@ -335,10 +336,12 @@ class node:
         self._cas(lock_name, 1, 1, ver)
 
     def _lockn(self, lock_name, ver):
-        if locked := self._cas(lock_name, 1, 0, ver):
-            return locked
-        return self._cas(lock_name, 1, None, ver)
-
+        while not (self._cas(lock_name, 1, None, ver) or self._cas(lock_name, 1, 0, ver)):
+            pass
+        return True
+        # if locked := self._cas(lock_name, 1, 0, ver):
+        #     return locked
+        # return self._cas(lock_name, 1, None, ver)
     # версия None чтобы показать что блокировка снята иначе до выхода TTL после unlock нельзя будет сделать lock
     def _unlock(self, lock_name, ver=None):
         if res:=self._cas(lock_name, 0, 1, ver):
